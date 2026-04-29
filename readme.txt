@@ -1,0 +1,2 @@
+$env:DISCORD_TOKEN="MTQ5ODcxMjc1NDY5MjAzMDY3NQ.G-N-57.VyTSEOyVr8fRIqmHDAepMRrRpxa9FPVtQejdws"
+>> node bot.js
