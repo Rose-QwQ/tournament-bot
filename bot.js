@@ -87,6 +87,8 @@ function newTournament(mode) {
     winnerVoteMessageId: null,
     winnerVotes: { A: [], B: [] },
     voiceChannels: { A: null, B: null },
+    activityCheckInterval: null,
+    activityCheckTimers: new Map(),
   };
 }
 
@@ -288,6 +290,7 @@ client.on('interactionCreate', async (interaction) => {
   if (id.startsWith('capvote_'))                    return handleCaptainVote(interaction);
   if (id.startsWith('draft_'))                      return handleDraftPick(interaction);
   if (id === 'winner_A' || id === 'winner_B')       return handleWinnerVote(interaction);
+  if (id.startsWith('still_here_'))                 return handleActivityResponse(interaction);
 });
 
 // ─── /tournament, /tournament5v5, /tournament3v3 ──────────────────────────────
@@ -324,6 +327,86 @@ async function handleTournamentStart(interaction, mode) {
       ephemeral: true,
     }).catch(() => {});
   }
+
+  // Start activity checks for queued players
+  startActivityChecks(interaction.guild, t);
+}
+
+// ─── Activity check response handler ─────────────────────────────────────────
+
+async function handleActivityResponse(interaction) {
+  const tid = interaction.customId.replace('still_here_', '');
+  const userId = interaction.user.id;
+  const t = getTournaments(interaction.guildId).get(tid);
+
+  if (!t || t.phase !== 'signup')
+    return interaction.reply({ content: 'No active queue to check in for.', ephemeral: true });
+  if (!t.players.some(p => p.id === userId))
+    return interaction.reply({ content: "You're not currently in the queue.", ephemeral: true });
+
+  const timer = t.activityCheckTimers.get(userId);
+  if (timer) { clearTimeout(timer); t.activityCheckTimers.delete(userId); }
+
+  await interaction.reply({ content: "✅ You're confirmed as still in the queue!", ephemeral: true });
+}
+
+// ─── Activity check (ping every 10 min, remove if no response in 2 min) ───────
+
+const ACTIVITY_CHECK_INTERVAL = 10 * 60 * 1000;
+const ACTIVITY_RESPONSE_WINDOW = 2 * 60 * 1000;
+
+function buildActivityCheckButtons(tid) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`still_here_${tid}`)
+        .setLabel('✅ Still here!')
+        .setStyle(ButtonStyle.Success)
+    ),
+  ];
+}
+
+async function startActivityChecks(guild, t) {
+  const tid = t.signupMessageId;
+  t.activityCheckInterval = setInterval(async () => {
+    if (t.phase !== 'signup') { stopActivityChecks(t); return; }
+    if (t.players.length === 0) return;
+
+    const signupChannel = guild.channels.cache.get(t.signupChannelId);
+    if (!signupChannel) return;
+
+    const mentions = t.players.map(p => `<@${p.id}>`).join(' ');
+    let checkMsg;
+    try {
+      checkMsg = await signupChannel.send({
+        content: `🔔 **Activity check!** ${mentions}\nYou have **2 minutes** to confirm you are still in the queue or you will be removed.`,
+        components: buildActivityCheckButtons(tid),
+      });
+    } catch (err) { console.error('Activity check send failed:', err.message); return; }
+
+    for (const player of [...t.players]) {
+      const removalTimer = setTimeout(async () => {
+        if (!t.players.some(p => p.id === player.id) || t.phase !== 'signup') return;
+        t.players = t.players.filter(p => p.id !== player.id);
+        console.log('Removed inactive player ' + player.tag + ' from queue');
+        try {
+          const ch = guild.channels.cache.get(t.signupChannelId);
+          if (ch) await ch.send({ content: `⚠️ <@${player.id}> was removed from the queue for inactivity.` });
+          const signupMsg = await ch?.messages.fetch(t.signupMessageId).catch(() => null);
+          if (signupMsg) await signupMsg.edit({ embeds: [buildSignupEmbed(t)] }).catch(() => {});
+        } catch {}
+      }, ACTIVITY_RESPONSE_WINDOW);
+      t.activityCheckTimers.set(player.id, removalTimer);
+    }
+
+    setTimeout(() => checkMsg.delete().catch(() => {}), ACTIVITY_RESPONSE_WINDOW + 5000);
+  }, ACTIVITY_CHECK_INTERVAL);
+}
+
+function stopActivityChecks(t) {
+  if (t.activityCheckInterval) { clearInterval(t.activityCheckInterval); t.activityCheckInterval = null; }
+  for (const timer of t.activityCheckTimers.values()) clearTimeout(timer);
+  t.activityCheckTimers.clear();
 }
 
 // ─── Reaction add / remove (signup tracking) ──────────────────────────────────
@@ -394,6 +477,18 @@ async function startTournament(guild, t) {
 
   t.channelId = channel.id;
   t.phase = 'vote_captains';
+
+  // Stop activity checks — queue is full
+  stopActivityChecks(t);
+
+  // Ping everyone in the signup channel
+  const signupCh = guild.channels.cache.get(t.signupChannelId);
+  if (signupCh) {
+    const mentions = t.players.map(p => `<@${p.id}>`).join(' ');
+    await signupCh.send({
+      content: `🚨 **The ${t.cfg.label} scrim is starting!** Head to <#${channel.id}>` + '\n' + mentions,
+    }).catch(() => {});
+  }
 
   await channel.send({
     embeds: [
@@ -764,6 +859,7 @@ async function scheduleCleanupAndRepost(guild, t) {
       fresh.signupMessageId = newMsg.id;
       getTournaments(guildId).set(newMsg.id, fresh);
       await newMsg.react(fresh.cfg.emoji);
+      startActivityChecks(guild, fresh);
       console.log(`🔄 Auto-reposted ${mode} signup in guild ${guildId}`);
     } catch (err) {
       console.error('Failed to repost signup:', err);
@@ -791,6 +887,7 @@ async function handleTournamentClose(interaction) {
 
   // Cancel any pending timers
   if (t.captainVoteTimerId) clearTimeout(t.captainVoteTimerId);
+  stopActivityChecks(t);
 
   // Delete voice channels
   for (const side of ['A', 'B']) {
