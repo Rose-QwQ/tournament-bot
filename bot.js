@@ -49,14 +49,14 @@ const SCRIM_RULES = `**📋 Scrim Rules**
 // ─── ELO & Rank system ────────────────────────────────────────────────────────
 const TIERS = [
   { name: 'Iron',     min: 0,    emoji: '🪨', color: 0x6b7280 },
-  { name: 'Bronze',   min: 500,  emoji: '🥉', color: 0x92400e },
-  { name: 'Silver',   min: 1000, emoji: '🥈', color: 0x9ca3af },
-  { name: 'Gold',     min: 1500, emoji: '🥇', color: 0xfbbf24 },
-  { name: 'Platinum', min: 2000, emoji: '💠', color: 0x06b6d4 },
-  { name: 'Diamond',  min: 2700, emoji: '💎', color: 0x818cf8 },
-  { name: 'Master',   min: 3500, emoji: '👑', color: 0xf59e0b },
+  { name: 'Bronze',   min: 100,  emoji: '🥉', color: 0x92400e },
+  { name: 'Silver',   min: 200,  emoji: '🥈', color: 0x9ca3af },
+  { name: 'Gold',     min: 350,  emoji: '🥇', color: 0xfbbf24 },
+  { name: 'Platinum', min: 500,  emoji: '💠', color: 0x06b6d4 },
+  { name: 'Diamond',  min: 700,  emoji: '💎', color: 0x818cf8 },
+  { name: 'Master',   min: 1000, emoji: '👑', color: 0xf59e0b },
 ];
-const STARTING_ELO = 1000;
+const STARTING_ELO = 200;
 const ELO_WIN      = 25;
 const ELO_LOSS     = 20;
 const ELO_FLOOR    = 0;
