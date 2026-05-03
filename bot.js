@@ -425,7 +425,13 @@ client.on('guildCreate', async (guild) => {
 
 // ─── Interaction router ────────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.guildId) return;
+  // Handle still_here buttons from DMs (no guildId in DM context)
+  if (!interaction.guildId) {
+    if (interaction.isButton() && interaction.customId.startsWith('still_here_')) {
+      return handleActivityResponseDM(interaction);
+    }
+    return;
+  }
   if (interaction.isChatInputCommand()) {
     const n = interaction.commandName;
     if (n === 'tournament')       return handleTournamentStart(interaction, '8v8');
@@ -832,6 +838,31 @@ async function scheduleCleanupAndRepost(guild, t) {
       console.log(`🔄 Auto-reposted ${mode} signup in guild ${guildId}`);
     } catch (err) { console.error('Failed to repost signup:', err); }
   }, 60 * 1000); // 1 minute
+}
+
+// ─── Activity check response (from DM) ───────────────────────────────────────
+async function handleActivityResponseDM(interaction) {
+  const tid = interaction.customId.replace('still_here_', '');
+  const userId = interaction.user.id;
+
+  // Search all guilds for this tournament
+  let found = false;
+  for (const [, ts] of guildTournaments) {
+    const t = ts.get(tid);
+    if (!t || t.phase !== 'signup') continue;
+    if (!t.players.some(p => p.id === userId)) continue;
+
+    const timer = t.activityCheckTimers.get(userId);
+    if (timer) { clearTimeout(timer); t.activityCheckTimers.delete(userId); }
+
+    await interaction.reply({ content: "✅ You're confirmed as still in the queue!", ephemeral: true });
+    found = true;
+    break;
+  }
+
+  if (!found) {
+    await interaction.reply({ content: "You're not currently in any active queue.", ephemeral: true });
+  }
 }
 
 // ─── Activity check response ───────────────────────────────────────────────────
