@@ -314,7 +314,7 @@ function buildWinnerVoteButtons() {
 }
 
 // ─── Activity check helpers ────────────────────────────────────────────────────
-const ACTIVITY_CHECK_INTERVAL = 10 * 60 * 1000;
+const ACTIVITY_CHECK_INTERVAL = 15 * 60 * 1000;
 const ACTIVITY_RESPONSE_WINDOW = 2 * 60 * 1000;
 
 function buildActivityCheckButtons(tid) {
@@ -330,33 +330,51 @@ async function startActivityChecks(guild, t) {
     if (t.players.length === 0) return;
     const ch = guild.channels.cache.get(t.signupChannelId);
     if (!ch) return;
-    const mentions = t.players.map(p => `<@${p.id}>`).join(' ');
-    let checkMsg;
-    try {
-      checkMsg = await ch.send({
-        content: `🔔 **Activity check!** ${mentions}\nYou have **2 minutes** to confirm you are still in the queue or you will be removed.`,
-        components: buildActivityCheckButtons(tid),
-      });
-      t.signupChannelMessageIds.push(checkMsg.id);
-    } catch (err) { console.error('Activity check send failed:', err.message); return; }
-
+    // Send individual DMs to each player for activity check (ghost ping — only they see it)
     for (const player of [...t.players]) {
+      try {
+        const member = await guild.members.fetch(player.id).catch(() => null);
+        if (!member) continue;
+        await member.send({
+          content: `🔔 **Activity check for the ${t.cfg.label} queue!**
+You have **2 minutes** to click below or you'll be removed from the queue.`,
+          components: buildActivityCheckButtons(tid),
+        }).catch(async () => {
+          // If DMs are closed, fall back to a ghost ping (mention then immediately delete)
+          try {
+            const ghostMsg = await ch.send({ content: `<@${player.id}>`, components: buildActivityCheckButtons(tid) });
+            t.signupChannelMessageIds.push(ghostMsg.id);
+            setTimeout(() => ghostMsg.delete().catch(() => {}), 100);
+            // Send a visible but quiet fallback
+            const fallback = await ch.send({
+              content: `🔔 <@${player.id}> — activity check! Click below within 2 minutes or you'll be removed.`,
+              components: buildActivityCheckButtons(tid),
+            });
+            t.signupChannelMessageIds.push(fallback.id);
+            setTimeout(() => fallback.delete().catch(() => {}), ACTIVITY_RESPONSE_WINDOW + 5000);
+          } catch {}
+        });
+      } catch {}
+
       const removalTimer = setTimeout(async () => {
         if (!t.players.some(p => p.id === player.id) || t.phase !== 'signup') return;
         t.players = t.players.filter(p => p.id !== player.id);
         try {
           const signupCh = guild.channels.cache.get(t.signupChannelId);
+          // Ghost ping: send then immediately delete so only they get a notification
           if (signupCh) {
-            const m = await signupCh.send({ content: `⚠️ <@${player.id}> was removed from the queue for inactivity.` });
-            t.signupChannelMessageIds.push(m.id);
+            const ghostMsg = await signupCh.send({ content: `<@${player.id}>` });
+            setTimeout(() => ghostMsg.delete().catch(() => {}), 100);
           }
+          // Also DM them
+          const member = await guild.members.fetch(player.id).catch(() => null);
+          if (member) await member.send({ content: `⚠️ You were removed from the **${t.cfg.label} queue** for inactivity.` }).catch(() => {});
           const signupMsg = await signupCh?.messages.fetch(t.signupMessageId).catch(() => null);
           if (signupMsg) await signupMsg.edit({ embeds: [buildSignupEmbed(t)] }).catch(() => {});
         } catch {}
       }, ACTIVITY_RESPONSE_WINDOW);
       t.activityCheckTimers.set(player.id, removalTimer);
     }
-    setTimeout(() => checkMsg.delete().catch(() => {}), ACTIVITY_RESPONSE_WINDOW + 5000);
   }, ACTIVITY_CHECK_INTERVAL);
 }
 
